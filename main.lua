@@ -5,11 +5,6 @@ local DEFAULT_TARGETS = {
 	{ on = "c", desc = "Custom destination…", dest = false },
 }
 
-local state = {
-	targets = DEFAULT_TARGETS,
-	remember = true,
-}
-
 local CACHE_FILE = os.getenv("HOME") .. "/.config/yazi/plugins/rsync-tail.yazi/.last_target"
 
 --- rsync expects local filesystem paths, not Yazi Url strings like file:///Users/...
@@ -75,8 +70,8 @@ local function read_cached_target()
 	return cached
 end
 
-local function write_cached_target(dest)
-	if not state.remember or not dest or dest == "" then
+local function write_cached_target(self, dest)
+	if not self.remember or not dest or dest == "" then
 		return
 	end
 
@@ -87,22 +82,22 @@ local function write_cached_target(dest)
 	end
 end
 
-local function build_picker_cands()
+local function build_picker_cands(self)
 	local cands = {}
-	for _, target in ipairs(state.targets) do
+	for _, target in ipairs(self.targets) do
 		cands[#cands + 1] = { on = target.on, desc = target.desc }
 	end
 	return cands
 end
 
-local function pick_destination()
-	local cands = build_picker_cands()
+local function pick_destination(self)
+	local cands = build_picker_cands(self)
 	local idx = ya.which({ cands = cands, silent = false })
 	if not idx then
 		return nil
 	end
 
-	local target = state.targets[idx]
+	local target = self.targets[idx]
 	if target.dest then
 		return target.dest
 	end
@@ -130,7 +125,7 @@ local function pick_destination()
 	return dest
 end
 
-local function run_rsync(files, dest)
+local function run_rsync(self, files, dest)
 	local cmd = Command("rsync")
 		:arg({ "-ahP", "--no-motd" })
 		:arg(files)
@@ -154,12 +149,15 @@ local function run_rsync(files, dest)
 		content = string.format("Sent %d item(s) → %s", #files, dest),
 		timeout = 4,
 	})
-	write_cached_target(dest)
+	write_cached_target(self, dest)
 	return true
 end
 
 return {
-	setup = function(_, opts)
+	setup = function(state, opts)
+		state.targets = DEFAULT_TARGETS
+		state.remember = true
+
 		if type(opts) ~= "table" then
 			return
 		end
@@ -173,7 +171,7 @@ return {
 		end
 	end,
 
-	entry = function(_, _)
+	entry = function(self, _)
 		ya.emit("escape", { visual = true })
 
 		local files = selected_or_hovered()
@@ -186,11 +184,11 @@ return {
 			})
 		end
 
-		local dest = pick_destination()
+		local dest = pick_destination(self)
 		if not dest then
 			return
 		end
 
-		run_rsync(files, dest)
+		run_rsync(self, files, dest)
 	end,
 }
