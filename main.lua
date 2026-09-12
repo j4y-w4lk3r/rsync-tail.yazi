@@ -5,6 +5,12 @@ local DEFAULT_TARGETS = {
 	{ on = "c", desc = "Custom destination…", dest = false },
 }
 
+-- Fallback config: init.lua setup() and entry() may not share the same table.
+local CONFIG = {
+	targets = DEFAULT_TARGETS,
+	remember = true,
+}
+
 local CACHE_FILE = os.getenv("HOME") .. "/.config/yazi/plugins/rsync-tail.yazi/.last_target"
 
 --- rsync expects local filesystem paths, not Yazi Url strings like file:///Users/...
@@ -35,6 +41,20 @@ local selected_or_hovered = ya.sync(function()
 
 	return paths
 end)
+
+local function targets_for(self)
+	if self and type(self.targets) == "table" and #self.targets > 0 then
+		return self.targets
+	end
+	return CONFIG.targets
+end
+
+local function remember_for(self)
+	if self and type(self.remember) == "boolean" then
+		return self.remember
+	end
+	return CONFIG.remember
+end
 
 local function expand_tilde(path)
 	if not path then
@@ -71,7 +91,7 @@ local function read_cached_target()
 end
 
 local function write_cached_target(self, dest)
-	if not self.remember or not dest or dest == "" then
+	if not remember_for(self) or not dest or dest == "" then
 		return
 	end
 
@@ -84,20 +104,31 @@ end
 
 local function build_picker_cands(self)
 	local cands = {}
-	for _, target in ipairs(self.targets) do
+	for _, target in ipairs(targets_for(self)) do
 		cands[#cands + 1] = { on = target.on, desc = target.desc }
 	end
 	return cands
 end
 
 local function pick_destination(self)
+	local targets = targets_for(self)
+	if #targets == 0 then
+		ya.notify({
+			title = "Rsync",
+			content = "No destinations configured in init.lua",
+			level = "error",
+			timeout = 6,
+		})
+		return nil
+	end
+
 	local cands = build_picker_cands(self)
 	local idx = ya.which({ cands = cands, silent = false })
 	if not idx then
 		return nil
 	end
 
-	local target = self.targets[idx]
+	local target = targets[idx]
 	if target.dest then
 		return target.dest
 	end
@@ -153,42 +184,67 @@ local function run_rsync(self, files, dest)
 	return true
 end
 
-return {
-	setup = function(state, opts)
-		state.targets = DEFAULT_TARGETS
-		state.remember = true
+local function apply_setup(self, opts)
+	CONFIG.targets = DEFAULT_TARGETS
+	CONFIG.remember = true
 
-		if type(opts) ~= "table" then
+	if type(opts) == "table" then
+		if type(opts.targets) == "table" and #opts.targets > 0 then
+			CONFIG.targets = opts.targets
+		end
+		if type(opts.remember) == "boolean" then
+			CONFIG.remember = opts.remember
+		end
+	end
+
+	if type(self) == "table" then
+		self.targets = CONFIG.targets
+		self.remember = CONFIG.remember
+	end
+end
+
+return {
+	setup = function(self, opts)
+		-- yazi: setup(plugin_state, opts)
+		-- some callers pass only the opts table as the first arg
+		if opts == nil and type(self) == "table" and type(self.targets) == "table" then
+			apply_setup(nil, self)
 			return
 		end
 
-		if type(opts.targets) == "table" and #opts.targets > 0 then
-			state.targets = opts.targets
-		end
-
-		if type(opts.remember) == "boolean" then
-			state.remember = opts.remember
-		end
+		apply_setup(self, opts)
 	end,
 
 	entry = function(self, _)
-		ya.emit("escape", { visual = true })
+		local ok, err = pcall(function()
+			ya.emit("escape", { visual = true })
 
-		local files = selected_or_hovered()
-		if #files == 0 then
-			return ya.notify({
+			local files = selected_or_hovered()
+			if #files == 0 then
+				return ya.notify({
+					title = "Rsync",
+					content = "No files selected",
+					level = "warn",
+					timeout = 3,
+				})
+			end
+
+			local dest = pick_destination(self)
+			if not dest then
+				return
+			end
+
+			run_rsync(self, files, dest)
+		end)
+
+		if not ok then
+			ya.notify({
 				title = "Rsync",
-				content = "No files selected",
-				level = "warn",
-				timeout = 3,
+				content = tostring(err),
+				level = "error",
+				timeout = 12,
 			})
+			ya.err("[rsync-tail] ", err)
 		end
-
-		local dest = pick_destination(self)
-		if not dest then
-			return
-		end
-
-		run_rsync(self, files, dest)
 	end,
 }
