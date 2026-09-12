@@ -221,6 +221,7 @@ end
 local function run_rsync(self, files, dest)
 	local cmd = Command("rsync")
 		:arg({ "-ahP", "--no-motd" })
+		:arg({ "-e", "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" })
 		:arg(files)
 		:arg(dest)
 		:stdout(Command.PIPED)
