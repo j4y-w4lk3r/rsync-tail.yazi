@@ -8,11 +8,24 @@ local DEFAULT_TARGETS = {
 local CONFIG = {
 	targets = DEFAULT_TARGETS,
 	remember = true,
+	setup_done = false,
 }
 
 local STATE_DIR = os.getenv("HOME") .. "/.local/state/yazi"
 local CACHE_FILE = STATE_DIR .. "/rsync-tail.last_target"
 local TARGETS_FILE = STATE_DIR .. "/rsync-tail.targets.json"
+local LOG_FILE = STATE_DIR .. "/rsync-tail.log"
+
+local function log(msg)
+	local line = os.date("%Y-%m-%dT%H:%M:%S") .. " " .. msg .. "\n"
+	ya.dbg("[rsync-tail] ", msg)
+	os.execute("mkdir -p " .. ya.quote(STATE_DIR))
+	local f = io.open(LOG_FILE, "a")
+	if f then
+		f:write(line)
+		f:close()
+	end
+end
 
 --- rsync expects local filesystem paths, not Yazi Url strings like file:///Users/...
 local function local_path(url)
@@ -67,21 +80,38 @@ local function load_targets_from_file()
 	f:close()
 
 	local ok, targets = pcall(ya.json_decode, content)
-	if ok and type(targets) == "table" and #targets > 0 then
-		return targets
+	if not ok then
+		log("json_decode failed: " .. tostring(targets))
+		return nil
+	end
+	if type(targets) ~= "table" or #targets == 0 then
+		log("targets file empty or invalid")
+		return nil
 	end
 
-	return nil
+	log("loaded " .. #targets .. " target(s) from " .. TARGETS_FILE)
+	return targets
 end
 
 local function targets_for(self)
+	-- File first: CONFIG may still hold the 1-entry default after module reload.
+	local file_targets = load_targets_from_file()
+	if file_targets then
+		return file_targets
+	end
+
 	if self and type(self.targets) == "table" and #self.targets > 0 then
+		log("using self.targets (" .. #self.targets .. ")")
 		return self.targets
 	end
-	if type(CONFIG.targets) == "table" and #CONFIG.targets > 0 then
+
+	if CONFIG.setup_done and type(CONFIG.targets) == "table" and #CONFIG.targets > 0 then
+		log("using CONFIG.targets (" .. #CONFIG.targets .. ")")
 		return CONFIG.targets
 	end
-	return load_targets_from_file() or DEFAULT_TARGETS
+
+	log("falling back to DEFAULT_TARGETS")
+	return DEFAULT_TARGETS
 end
 
 local function remember_for(self)
@@ -252,7 +282,9 @@ local function apply_setup(self, opts)
 		end
 	end
 
+	CONFIG.setup_done = true
 	save_targets(CONFIG.targets)
+	log("setup saved " .. #CONFIG.targets .. " target(s)")
 
 	if type(self) == "table" then
 		self.targets = CONFIG.targets
@@ -272,6 +304,7 @@ return {
 
 	entry = function(self, _)
 		local ok, err = pcall(function()
+			log("entry start")
 			ya.emit("escape", { visual = true })
 
 			local files = selected_or_hovered()
