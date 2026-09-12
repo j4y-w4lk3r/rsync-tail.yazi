@@ -2,7 +2,7 @@
 --- Based on GianniBYoung/rsync.yazi (MIT)
 
 local DEFAULT_TARGETS = {
-	{ on = "<A-c>", desc = "Custom destination…", dest = false },
+	{ on = "0", desc = "Custom destination…", dest = false },
 }
 
 local CONFIG = {
@@ -168,27 +168,6 @@ local function write_cached_target(self, dest)
 	end
 end
 
-local function format_key(on)
-	if type(on) == "table" then
-		return table.concat(on, "")
-	end
-	return tostring(on)
-end
-
-local function notify_targets(targets)
-	local lines = {}
-	for _, target in ipairs(targets) do
-		lines[#lines + 1] = string.format("%s  %s", format_key(target.on), target.desc or target.dest or "")
-	end
-
-	ya.notify({
-		title = "Rsync destinations",
-		content = table.concat(lines, "\n"),
-		level = "info",
-		timeout = 8,
-	})
-end
-
 local function pick_destination(self)
 	local targets = targets_for(self)
 	if #targets == 0 then
@@ -205,8 +184,6 @@ local function pick_destination(self)
 	for _, target in ipairs(targets) do
 		cands[#cands + 1] = { on = target.on, desc = target.desc }
 	end
-
-	notify_targets(targets)
 
 	local idx = ya.which({ cands = cands, silent = false })
 	if not idx then
