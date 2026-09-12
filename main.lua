@@ -2,16 +2,17 @@
 --- Based on GianniBYoung/rsync.yazi (MIT)
 
 local DEFAULT_TARGETS = {
-	{ on = "c", desc = "Custom destination…", dest = false },
+	{ on = "<A-c>", desc = "Custom destination…", dest = false },
 }
 
--- Fallback config: init.lua setup() and entry() may not share the same table.
 local CONFIG = {
 	targets = DEFAULT_TARGETS,
 	remember = true,
 }
 
-local CACHE_FILE = os.getenv("HOME") .. "/.config/yazi/plugins/rsync-tail.yazi/.last_target"
+local STATE_DIR = os.getenv("HOME") .. "/.local/state/yazi"
+local CACHE_FILE = STATE_DIR .. "/rsync-tail.last_target"
+local TARGETS_FILE = STATE_DIR .. "/rsync-tail.targets.json"
 
 --- rsync expects local filesystem paths, not Yazi Url strings like file:///Users/...
 local function local_path(url)
@@ -42,11 +43,45 @@ local selected_or_hovered = ya.sync(function()
 	return paths
 end)
 
+local function save_targets(targets)
+	local ok, json = pcall(ya.json_encode, targets)
+	if not ok or not json then
+		return
+	end
+
+	os.execute("mkdir -p " .. ya.quote(STATE_DIR))
+	local f = io.open(TARGETS_FILE, "w")
+	if f then
+		f:write(json)
+		f:close()
+	end
+end
+
+local function load_targets_from_file()
+	local f = io.open(TARGETS_FILE, "r")
+	if not f then
+		return nil
+	end
+
+	local content = f:read("*a")
+	f:close()
+
+	local ok, targets = pcall(ya.json_decode, content)
+	if ok and type(targets) == "table" and #targets > 0 then
+		return targets
+	end
+
+	return nil
+end
+
 local function targets_for(self)
 	if self and type(self.targets) == "table" and #self.targets > 0 then
 		return self.targets
 	end
-	return CONFIG.targets
+	if type(CONFIG.targets) == "table" and #CONFIG.targets > 0 then
+		return CONFIG.targets
+	end
+	return load_targets_from_file() or DEFAULT_TARGETS
 end
 
 local function remember_for(self)
@@ -95,6 +130,7 @@ local function write_cached_target(self, dest)
 		return
 	end
 
+	os.execute("mkdir -p " .. ya.quote(STATE_DIR))
 	local f = io.open(CACHE_FILE, "w")
 	if f then
 		f:write(dest)
@@ -102,12 +138,25 @@ local function write_cached_target(self, dest)
 	end
 end
 
-local function build_picker_cands(self)
-	local cands = {}
-	for _, target in ipairs(targets_for(self)) do
-		cands[#cands + 1] = { on = target.on, desc = target.desc }
+local function format_key(on)
+	if type(on) == "table" then
+		return table.concat(on, "")
 	end
-	return cands
+	return tostring(on)
+end
+
+local function notify_targets(targets)
+	local lines = {}
+	for _, target in ipairs(targets) do
+		lines[#lines + 1] = string.format("%s  %s", format_key(target.on), target.desc or target.dest or "")
+	end
+
+	ya.notify({
+		title = "Rsync destinations",
+		content = table.concat(lines, "\n"),
+		level = "info",
+		timeout = 8,
+	})
 end
 
 local function pick_destination(self)
@@ -122,7 +171,13 @@ local function pick_destination(self)
 		return nil
 	end
 
-	local cands = build_picker_cands(self)
+	local cands = {}
+	for _, target in ipairs(targets) do
+		cands[#cands + 1] = { on = target.on, desc = target.desc }
+	end
+
+	notify_targets(targets)
+
 	local idx = ya.which({ cands = cands, silent = false })
 	if not idx then
 		return nil
@@ -197,6 +252,8 @@ local function apply_setup(self, opts)
 		end
 	end
 
+	save_targets(CONFIG.targets)
+
 	if type(self) == "table" then
 		self.targets = CONFIG.targets
 		self.remember = CONFIG.remember
@@ -205,8 +262,6 @@ end
 
 return {
 	setup = function(self, opts)
-		-- yazi: setup(plugin_state, opts)
-		-- some callers pass only the opts table as the first arg
 		if opts == nil and type(self) == "table" and type(self.targets) == "table" then
 			apply_setup(nil, self)
 			return
